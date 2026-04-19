@@ -3,8 +3,9 @@ from google.oauth2.service_account import Credentials
 from url_parser import ShopInfo
 import json
 import os
+from dotenv import load_dotenv
 
-
+load_dotenv()
 class GoogleSpreadsheetClient:
     def __init__(self):
         self._scope = [
@@ -14,7 +15,7 @@ class GoogleSpreadsheetClient:
 
         self._credentials = Credentials.from_service_account_file("credentials.json", scopes=self._scope)
         self._gspread_client = gspread.authorize(self._credentials)
-        self._spreadsheet = self._gspread_client.open_by_url("https://docs.google.com/spreadsheets/d/1JCH0ZoYHMAf6Muxq6aRsCE86j7YEjgisv_U9zMeZJXo/edit?usp=sharing")
+        self._spreadsheet = self._gspread_client.open_by_url(os.getenv("SPREADSHEET_URL"))
         self._worksheet = self._spreadsheet.sheet1
 
         self._cache_file = "shop_cache.json"
