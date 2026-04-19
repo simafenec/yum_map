@@ -1,4 +1,4 @@
 .env
 credentials.json
 shop_cache.json
-venv
+venv/
