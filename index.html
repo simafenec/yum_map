@@ -17,7 +17,7 @@
         async function initMap() {
             // 1. スプレッドシートからデータ取得
             const res = await fetch(
-                `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Sheet1?key=${API_KEY}`
+                `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/main?key=${API_KEY}`
             );
             const data = await res.json();
             const rows = data.values.slice(1); // ヘッダー行を除く
