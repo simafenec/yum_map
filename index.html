@@ -3,16 +3,163 @@
 <head>
     <meta charset="UTF-8">
     <title>美味しいお店マップ</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
-        #map { height: 100vh; width: 100%; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Noto Sans JP', sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            background: #1a1a2e;
+        }
+
+        /* サイドバー */
+        #sidebar {
+            width: 320px;
+            min-width: 320px;
+            background: #16213e;
+            color: #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 4px 0 20px rgba(0,0,0,0.4);
+            z-index: 10;
+        }
+
+        #sidebar-header {
+            padding: 24px 20px 16px;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        #sidebar-header h1 {
+            font-size: 18px;
+            font-weight: 700;
+            color: #e94560;
+            letter-spacing: 0.05em;
+        }
+
+        #sidebar-header p {
+            font-size: 12px;
+            color: #7a8ba0;
+            margin-top: 4px;
+        }
+
+        #shop-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 0;
+        }
+
+        #shop-list::-webkit-scrollbar { width: 4px; }
+        #shop-list::-webkit-scrollbar-track { background: #16213e; }
+        #shop-list::-webkit-scrollbar-thumb { background: #0f3460; border-radius: 2px; }
+
+        .shop-item {
+            padding: 14px 20px;
+            cursor: pointer;
+            border-left: 3px solid transparent;
+            transition: all 0.2s ease;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+
+        .shop-item:hover {
+            background: rgba(233, 69, 96, 0.1);
+            border-left-color: #e94560;
+        }
+
+        .shop-item.active {
+            background: rgba(233, 69, 96, 0.15);
+            border-left-color: #e94560;
+        }
+
+        .shop-item .shop-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: #e0e0e0;
+        }
+
+        .shop-item .shop-date {
+            font-size: 11px;
+            color: #7a8ba0;
+            margin-top: 4px;
+        }
+
+        #map-container {
+            flex: 1;
+            position: relative;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+
+        #loading {
+            position: absolute;
+            inset: 0;
+            background: #1a1a2e;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #e0e0e0;
+            font-size: 14px;
+            z-index: 5;
+        }
+
+        .spinner {
+            width: 28px;
+            height: 28px;
+            border: 3px solid rgba(233,69,96,0.2);
+            border-top-color: #e94560;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 12px;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        #count-badge {
+            display: inline-block;
+            background: #e94560;
+            color: white;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
     </style>
 </head>
 <body>
-    <div id="map"></div>
+
+    <div id="sidebar">
+        <div id="sidebar-header">
+            <h1>🍜 美味しいお店マップ <span id="count-badge">0</span></h1>
+            <p>クリックでその場所にジャンプ</p>
+        </div>
+        <div id="shop-list">
+            <div style="padding:20px;color:#7a8ba0;font-size:13px;">読み込み中...</div>
+        </div>
+    </div>
+
+    <div id="map-container">
+        <div id="loading">
+            <div class="spinner"></div>
+            読み込み中...
+        </div>
+        <div id="map"></div>
+    </div>
 
     <script>
-        const SHEET_ID  = "1NMCPPC7fK1V2uFklEIiUV43UTmp8VgXs_ZxcrsSMg8Y";
-        const API_KEY   = "AIzaSyAbxCb_3w3Ix3EaJkbxSqqtTgLRRmth1z4"; // 読み取り専用に制限すること
+        const SHEET_ID = "1NMCPPC7fK1V2uFklEIiUV43UTmp8VgXs_ZxcrsSMg8Y";
+        const API_KEY  = "AIzaSyAbxCb_3w3Ix3EaJkbxSqqtTgLRRmth1z4";
+
+        let map;
+        let markers = [];
+        let infoWindows = [];
+        let activeItem = null;
 
         async function initMap() {
             // 1. スプレッドシートからデータ取得
@@ -26,38 +173,86 @@
             const { Map } = await google.maps.importLibrary("maps");
             const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
 
-            const map = new Map(document.getElementById("map"), {
+            map = new Map(document.getElementById("map"), {
                 center: { lat: 35.6433415, lng: 139.6692687 },
                 zoom: 12,
-                mapId: "your_map_id" // AdvancedMarkerに必要
+                mapId: "your_map_id",
+                disableDefaultUI: false,
             });
 
-            // 3. ピンを立てる
-            rows.forEach(([name, lat, lng, added_at]) => {
+            // ローディング非表示
+            document.getElementById("loading").style.display = "none";
+
+            // 件数バッジ更新
+            document.getElementById("count-badge").textContent = rows.length;
+
+            // リスト初期化
+            const shopList = document.getElementById("shop-list");
+            shopList.innerHTML = "";
+
+            // 3. ピンとリストを生成
+            rows.forEach(([name, lat, lng, added_at], index) => {
+                const position = { lat: parseFloat(lat), lng: parseFloat(lng) };
+
+                // ピンを立てる
                 const marker = new AdvancedMarkerElement({
                     map,
-                    position: { lat: parseFloat(lat), lng: parseFloat(lng) },
+                    position,
                     title: name,
                 });
 
-                // クリックでポップアップ
+                // InfoWindow
                 const infoWindow = new google.maps.InfoWindow({
                     content: `
-                        <div>
-                            <h3>${name}</h3>
-                            <p>📍 登録者: ${added_by}</p>
-                            <p>🕐 ${added_at}</p>
+                        <div style="font-family:'Noto Sans JP',sans-serif;padding:4px 6px;">
+                            <div style="font-weight:700;font-size:14px;margin-bottom:4px;">${name}</div>
+                            <div style="font-size:12px;color:#888;">🕐 ${added_at}</div>
                         </div>
                     `
                 });
+
+                markers.push(marker);
+                infoWindows.push(infoWindow);
+
+                // マーカークリック
                 marker.addListener("click", () => {
+                    closeAllInfoWindows();
                     infoWindow.open(map, marker);
+                    setActiveItem(index);
                 });
+
+                // サイドバーのリストアイテム
+                const item = document.createElement("div");
+                item.className = "shop-item";
+                item.innerHTML = `
+                    <div class="shop-name">${name}</div>
+                    <div class="shop-date">🕐 ${added_at}</div>
+                `;
+                item.addEventListener("click", () => {
+                    map.panTo(position);
+                    map.setZoom(16);
+                    closeAllInfoWindows();
+                    infoWindow.open(map, marker);
+                    setActiveItem(index);
+                });
+                item.dataset.index = index;
+                shopList.appendChild(item);
             });
+        }
+
+        function closeAllInfoWindows() {
+            infoWindows.forEach(iw => iw.close());
+        }
+
+        function setActiveItem(index) {
+            if (activeItem !== null) {
+                document.querySelector(`.shop-item[data-index="${activeItem}"]`)?.classList.remove("active");
+            }
+            document.querySelector(`.shop-item[data-index="${index}"]`)?.classList.add("active");
+            activeItem = index;
         }
     </script>
 
-    <!-- Maps JavaScript API 読み込み -->
     <script
         src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAbxCb_3w3Ix3EaJkbxSqqtTgLRRmth1z4&callback=initMap"
         async defer>
