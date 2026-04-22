@@ -26,14 +26,30 @@ async def on_ready():
 async def on_message(message : discord.Message):
     if message.author.bot:
         return
-    if message.content.startswith("https://maps.app.goo.gl/"):
+    if message.content == "!update_history":
+        await message.channel.send("履歴からマップデータを更新します...")
+        await update_history(message.channel.id)
+        await message.channel.send("履歴の更新が完了しました！")
+    await add_shop_info_from_message(message)
+
+async def add_shop_info_from_message(message : discord.Message):
+    if "https://maps.app.goo.gl/" in message.content:
         shop_infos = parser.parse_google_map_share_url(message.content)
         if shop_infos:
             for shop_info in shop_infos:
                 result = spreadsheet_client.append_row(shop_info, message.created_at.strftime("%Y/%m/%d %H:%M:%S"))
                 if result:
-                    await message.channel.send(f"<@{message.author.id}> さんにより {shop_info.name}が追加されました！")
+                    print(f"{shop_info.name} を追加しました！")
         else:
-            await message.channel.send("Googleマップの共有URLから情報を取得できませんでした。")
+            print("Googleマップの共有URLから情報を取得できませんでした。")
+
+async def update_history(channel_id : int):
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        print(f"チャンネルID {channel_id} が見つかりませんでした。")
+        return
+
+    async for message in channel.history(limit=100):
+        await add_shop_info_from_message(message)
 
 client.run(TOKEN)
