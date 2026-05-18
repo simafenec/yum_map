@@ -237,42 +237,31 @@
 
         const sidebar = document.getElementById('sidebar');
         const COLLAPSED_VISIBLE_PX = 72;
+        let sheetIsOpen = false;
 
         function isMobile() {
             return window.innerWidth <= 640;
-        }
-
-        function getSidebarTranslateY() {
-            const matrix = new DOMMatrix(getComputedStyle(sidebar).transform);
-            return matrix.m42;
         }
 
         function getMaxOffset() {
             return sidebar.offsetHeight - COLLAPSED_VISIBLE_PX;
         }
 
-        function snapSheet(shouldOpen) {
-            sidebar.style.transition = 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
-            if (shouldOpen) {
-                sidebar.classList.add('open');
-                sidebar.style.transform = 'translateY(0px)';
-            } else {
-                sidebar.classList.remove('open');
-                sidebar.style.transform = `translateY(${getMaxOffset()}px)`;
-            }
-            sidebar.addEventListener('transitionend', () => {
-                sidebar.style.transform = '';
-                sidebar.style.transition = '';
-            }, { once: true });
+        function snapSheet(shouldOpen, animate = true) {
+            sheetIsOpen = shouldOpen;
+            sidebar.style.transition = animate
+                ? 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+                : 'none';
+            sidebar.style.transform = shouldOpen ? 'translateY(0px)' : `translateY(${getMaxOffset()}px)`;
         }
 
         function closeSidebar() {
             if (isMobile()) snapSheet(false);
         }
 
-        // ===== スワイプ操作 =====
+        // ===== ドラッグ操作 =====
         let touchStartY = 0;
-        let touchStartTranslateY = 0;
+        let touchStartOffset = 0;  // ドラッグ開始時の translateY (px)
         let touchCurrentY = 0;
         let touchStartTime = 0;
         let isDraggingSheet = false;
@@ -283,8 +272,10 @@
             touchCurrentY = touchStartY;
             touchStartTime = Date.now();
             isDraggingSheet = false;
-            touchStartTranslateY = getSidebarTranslateY();
+            // 開閉状態から現在オフセットを決定（CSS calc() に依存しない）
+            touchStartOffset = sheetIsOpen ? 0 : getMaxOffset();
             sidebar.style.transition = 'none';
+            sidebar.style.transform = `translateY(${touchStartOffset}px)`;
         }
 
         function onSheetTouchMove(e) {
@@ -298,7 +289,7 @@
             if (!isDraggingSheet) return;
 
             e.preventDefault();
-            const newOffset = Math.max(0, Math.min(getMaxOffset(), touchStartTranslateY + deltaY));
+            const newOffset = Math.max(0, Math.min(getMaxOffset(), touchStartOffset + deltaY));
             sidebar.style.transform = `translateY(${newOffset}px)`;
         }
 
@@ -307,20 +298,19 @@
 
             if (!isDraggingSheet) {
                 // タップ → トグル
-                sidebar.style.transition = 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
-                sidebar.classList.toggle('open');
+                snapSheet(!sheetIsOpen);
                 e.preventDefault();
                 return;
             }
 
             const deltaY = touchCurrentY - touchStartY;
-            const velocity = deltaY / (Date.now() - touchStartTime); // px/ms
+            const velocity = deltaY / Math.max(1, Date.now() - touchStartTime); // px/ms
 
             let shouldOpen;
             if (Math.abs(velocity) > 0.4) {
                 shouldOpen = velocity < 0; // 上スワイプ → 開く
             } else {
-                shouldOpen = (touchStartTranslateY + deltaY) < getMaxOffset() / 2;
+                shouldOpen = (touchStartOffset + deltaY) < getMaxOffset() / 2;
             }
             snapSheet(shouldOpen);
         }
