@@ -2,6 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>美味しいお店マップ</title>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
@@ -15,7 +16,7 @@
             background: #1a1a2e;
         }
 
-        /* サイドバー */
+        /* ===== サイドバー（デスクトップ） ===== */
         #sidebar {
             width: 320px;
             min-width: 320px;
@@ -85,6 +86,7 @@
             margin-top: 4px;
         }
 
+        /* ===== マップ ===== */
         #map-container {
             flex: 1;
             position: relative;
@@ -130,14 +132,86 @@
             margin-left: 8px;
             vertical-align: middle;
         }
+
+        /* ===== ドラッグハンドル（モバイルのみ表示） ===== */
+        #drag-handle {
+            display: none;
+        }
+
+        /* ===== モバイルレイアウト ===== */
+        @media (max-width: 640px) {
+            body {
+                flex-direction: column;
+            }
+
+            #map-container {
+                position: fixed;
+                inset: 0;
+            }
+
+            #sidebar {
+                width: 100%;
+                min-width: 0;
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                max-height: 65vh;
+                border-radius: 16px 16px 0 0;
+                box-shadow: 0 -4px 24px rgba(0,0,0,0.5);
+                z-index: 20;
+                transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                transform: translateY(calc(100% - 72px));
+            }
+
+            #sidebar.open {
+                transform: translateY(0);
+            }
+
+            #drag-handle {
+                display: flex;
+                justify-content: center;
+                padding: 10px 0 6px;
+                cursor: pointer;
+                flex-shrink: 0;
+            }
+
+            #drag-handle::before {
+                content: '';
+                width: 40px;
+                height: 4px;
+                background: rgba(255,255,255,0.25);
+                border-radius: 2px;
+            }
+
+            #sidebar-header {
+                padding: 8px 20px 14px;
+                cursor: pointer;
+                user-select: none;
+                -webkit-user-select: none;
+            }
+
+            #sidebar-header h1 {
+                font-size: 16px;
+            }
+
+            .shop-item {
+                padding: 16px 20px;
+            }
+
+            .shop-item .shop-name {
+                font-size: 15px;
+            }
+        }
     </style>
 </head>
 <body>
 
     <div id="sidebar">
+        <div id="drag-handle"></div>
         <div id="sidebar-header">
             <h1>🍜 美味しいお店マップ <span id="count-badge">0</span></h1>
-            <p>クリックでその場所にジャンプ</p>
+            <p>タップでその場所にジャンプ</p>
         </div>
         <div id="shop-list">
             <div style="padding:20px;color:#7a8ba0;font-size:13px;">読み込み中...</div>
@@ -161,15 +235,32 @@
         let infoWindows = [];
         let activeItem = null;
 
+        function isMobile() {
+            return window.innerWidth <= 640;
+        }
+
+        function toggleSidebar() {
+            if (isMobile()) {
+                document.getElementById('sidebar').classList.toggle('open');
+            }
+        }
+
+        function closeSidebar() {
+            if (isMobile()) {
+                document.getElementById('sidebar').classList.remove('open');
+            }
+        }
+
+        document.getElementById('drag-handle').addEventListener('click', toggleSidebar);
+        document.getElementById('sidebar-header').addEventListener('click', toggleSidebar);
+
         async function initMap() {
-            // 1. スプレッドシートからデータ取得
             const res = await fetch(
                 `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/main?key=${API_KEY}`
             );
             const data = await res.json();
-            const rows = data.values.slice(1); // ヘッダー行を除く
+            const rows = data.values.slice(1);
 
-            // 2. 地図を初期化
             const { Map } = await google.maps.importLibrary("maps");
             const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
 
@@ -180,28 +271,21 @@
                 disableDefaultUI: false,
             });
 
-            // ローディング非表示
             document.getElementById("loading").style.display = "none";
-
-            // 件数バッジ更新
             document.getElementById("count-badge").textContent = rows.length;
 
-            // リスト初期化
             const shopList = document.getElementById("shop-list");
             shopList.innerHTML = "";
 
-            // 3. ピンとリストを生成
             rows.forEach(([name, lat, lng, added_at], index) => {
                 const position = { lat: parseFloat(lat), lng: parseFloat(lng) };
 
-                // ピンを立てる
                 const marker = new AdvancedMarkerElement({
                     map,
                     position,
                     title: name,
                 });
 
-                // InfoWindow
                 const infoWindow = new google.maps.InfoWindow({
                     content: `
                         <div style="font-family:'Noto Sans JP',sans-serif;padding:4px 6px;">
@@ -214,14 +298,13 @@
                 markers.push(marker);
                 infoWindows.push(infoWindow);
 
-                // マーカークリック
                 marker.addListener("click", () => {
                     closeAllInfoWindows();
                     infoWindow.open(map, marker);
                     setActiveItem(index);
+                    closeSidebar();
                 });
 
-                // サイドバーのリストアイテム
                 const item = document.createElement("div");
                 item.className = "shop-item";
                 item.innerHTML = `
@@ -234,6 +317,7 @@
                     closeAllInfoWindows();
                     infoWindow.open(map, marker);
                     setActiveItem(index);
+                    closeSidebar();
                 });
                 item.dataset.index = index;
                 shopList.appendChild(item);
