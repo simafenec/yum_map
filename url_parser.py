@@ -8,6 +8,7 @@ GOOGLE_MAP_SHARE_URL_REGEX = r"https://maps\.app\.goo\.gl/[a-zA-Z0-9?_=]+"
 GOOGLE_MAP_PLACE_URL_REGEX = r"https://www\.google\.[^/]+/maps/place/(?P<name>[^/@]+)/@(?P<lat>-?\d+\.\d+),(?P<lon>-?\d+\.\d+),\d+z"
 PLACES_API_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 PLACES_NEARBY_API_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+PLACES_DETAILS_API_URL = "https://maps.googleapis.com/maps/api/place/details/json"
 
 # Places API v1 (textsearch) は汎用タイプしか返さないため、店名キーワードを第1優先にする
 NAME_GENRE_PATTERNS = [
@@ -158,15 +159,59 @@ class URLParser:
         if 'continue' not in sorry_qs:
             return None
         continue_url = unquote_plus(sorry_qs['continue'][0])
-        c_qs = parse_qs(urlparse(continue_url).query)
+        c_parsed = urlparse(continue_url)
+        c_qs = parse_qs(c_parsed.query)
         ftid = c_qs.get('ftid', [''])[0]
         q_value = c_qs.get('q', [''])[0]
-        if not q_value or not self._geocoding_api_key:
+
+        # /maps/place/NAME/data= 形式: パスから店名+住所と CID を取得
+        if not q_value:
+            place_m = re.search(r'/maps/place/([^/]+)/data=', c_parsed.path)
+            if place_m:
+                q_value = self._unquote_unicode(place_m.group(1))
+            if not ftid:
+                cid_m = re.search(r'!1s(0x[0-9a-f]+:0x[0-9a-f]+)', c_parsed.path)
+                if cid_m:
+                    ftid = cid_m.group(1)
+
+        if not self._geocoding_api_key:
             return None
-        info = self._find_place(q_value)
-        if info:
+        if q_value:
+            info = self._find_place(q_value)
+        elif ftid:
+            # 店名がなく ftid のみの場合: Place Details API で CID から直接取得
+            info = self._find_place_by_cid(ftid)
+        else:
+            return None
+        if info and ftid:
             info.place_key = ftid
         return info
+
+    def _find_place_by_cid(self, ftid: str) -> Optional[ShopInfo]:
+        """0xHH:0xLL 形式の CID から Place Details API で店情報を取得する"""
+        parts = ftid.split(':')
+        if len(parts) != 2:
+            return None
+        try:
+            cid = int(parts[1], 16)
+        except ValueError:
+            return None
+        resp = requests.get(
+            PLACES_DETAILS_API_URL,
+            params={
+                'cid': cid,
+                'key': self._geocoding_api_key,
+                'language': 'ja',
+                'fields': 'name,geometry,types'
+            }
+        )
+        result = resp.json().get('result')
+        if not result:
+            return None
+        loc = result['geometry']['location']
+        name = result['name']
+        genre = self._genre_from_name(name) or self._extract_genre(result.get('types', []))
+        return ShopInfo(name=name, lat=loc['lat'], lon=loc['lng'], place_key=ftid, genre=genre)
 
     def _find_place_nearby(self, lat: float, lon: float) -> Optional[ShopInfo]:
         resp = requests.get(
@@ -279,11 +324,17 @@ class URLParser:
             response = self._get_response(url)
 
             if '/sorry/' in response.url:
-                # ボット検出でリダイレクトされた場合: continue URL から ftid を取り出してキャッシュ確認
+                # ボット検出でリダイレクトされた場合: continue URL から place_key を取り出してキャッシュ確認
                 sorry_qs = parse_qs(urlparse(response.url).query)
                 if 'continue' in sorry_qs:
-                    c_qs = parse_qs(urlparse(unquote_plus(sorry_qs['continue'][0])).query)
-                    ftid = c_qs.get('ftid', [''])[0]
+                    _cu = unquote_plus(sorry_qs['continue'][0])
+                    _cp = urlparse(_cu)
+                    _cq = parse_qs(_cp.query)
+                    ftid = _cq.get('ftid', [''])[0]
+                    if not ftid:
+                        _cid_m = re.search(r'!1s(0x[0-9a-f]+:0x[0-9a-f]+)', _cp.path)
+                        if _cid_m:
+                            ftid = _cid_m.group(1)
                     if is_cached and ftid and is_cached(ftid):
                         continue
                 info = self._extract_from_sorry_redirect(response.url)
