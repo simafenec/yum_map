@@ -133,6 +133,45 @@
             vertical-align: middle;
         }
 
+        /* ===== エリア切り替えスイッチ ===== */
+        #area-switch {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            z-index: 10;
+            display: flex;
+            background: #16213e;
+            border-radius: 24px;
+            padding: 4px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+            border: 1px solid #0f3460;
+        }
+
+        .area-btn {
+            padding: 8px 20px;
+            border: none;
+            border-radius: 20px;
+            font-family: 'Noto Sans JP', sans-serif;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            color: #7a8ba0;
+            background: transparent;
+            transition: all 0.2s ease;
+            letter-spacing: 0.03em;
+        }
+
+        .area-btn.active {
+            background: #e94560;
+            color: #ffffff;
+            box-shadow: 0 2px 8px rgba(233,69,96,0.4);
+        }
+
+        .area-btn:not(.active):hover {
+            color: #e0e0e0;
+            background: rgba(255,255,255,0.05);
+        }
+
         /* ===== ドラッグハンドル（モバイルのみ表示） ===== */
         #drag-handle {
             display: none;
@@ -202,6 +241,17 @@
             .shop-item .shop-name {
                 font-size: 15px;
             }
+
+            #area-switch {
+                top: 12px;
+                right: 12px;
+                padding: 3px;
+            }
+
+            .area-btn {
+                padding: 7px 14px;
+                font-size: 12px;
+            }
         }
     </style>
 </head>
@@ -224,16 +274,28 @@
             読み込み中...
         </div>
         <div id="map"></div>
+        <div id="area-switch">
+            <button class="area-btn active" data-area="shibuya">渋谷</button>
+            <button class="area-btn"        data-area="umeda">梅田</button>
+        </div>
     </div>
 
     <script>
         const SHEET_ID = "1NMCPPC7fK1V2uFklEIiUV43UTmp8VgXs_ZxcrsSMg8Y";
         const API_KEY  = "AIzaSyAbxCb_3w3Ix3EaJkbxSqqtTgLRRmth1z4";
 
+        const AREAS = {
+            shibuya: { sheet: "main",  center: { lat: 35.6433415, lng: 139.6692687 }, zoom: 12 },
+            umeda:   { sheet: "umeda", center: { lat: 34.7022,    lng: 135.4963    }, zoom: 13 },
+        };
+
         let map;
-        let markers = [];
+        let AdvancedMarkerElement;
+        let markers    = [];
         let infoWindows = [];
-        let activeItem = null;
+        let activeItem  = null;
+        let currentArea = "shibuya";
+        let isLoading   = false;
 
         const sidebar = document.getElementById('sidebar');
         const COLLAPSED_VISIBLE_PX = 72;
@@ -261,7 +323,7 @@
 
         // ===== ドラッグ操作 =====
         let touchStartY = 0;
-        let touchStartOffset = 0;  // ドラッグ開始時の translateY (px)
+        let touchStartOffset = 0;
         let touchCurrentY = 0;
         let touchStartTime = 0;
         let isDraggingSheet = false;
@@ -272,7 +334,6 @@
             touchCurrentY = touchStartY;
             touchStartTime = Date.now();
             isDraggingSheet = false;
-            // 開閉状態から現在オフセットを決定（CSS calc() に依存しない）
             touchStartOffset = sheetIsOpen ? 0 : getMaxOffset();
             sidebar.style.transition = 'none';
             sidebar.style.transform = `translateY(${touchStartOffset}px)`;
@@ -297,18 +358,17 @@
             if (!isMobile()) return;
 
             if (!isDraggingSheet) {
-                // タップ → トグル
                 snapSheet(!sheetIsOpen);
                 e.preventDefault();
                 return;
             }
 
             const deltaY = touchCurrentY - touchStartY;
-            const velocity = deltaY / Math.max(1, Date.now() - touchStartTime); // px/ms
+            const velocity = deltaY / Math.max(1, Date.now() - touchStartTime);
 
             let shouldOpen;
             if (Math.abs(velocity) > 0.4) {
-                shouldOpen = velocity < 0; // 上スワイプ → 開く
+                shouldOpen = velocity < 0;
             } else {
                 shouldOpen = (touchStartOffset + deltaY) < getMaxOffset() / 2;
             }
@@ -322,74 +382,115 @@
             el.addEventListener('touchend', onSheetTouchEnd);
         });
 
-        async function initMap() {
-            const res = await fetch(
-                `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/main?key=${API_KEY}`
+        // ===== エリア切り替え =====
+        function switchArea(area) {
+            if (area === currentArea || isLoading) return;
+            currentArea = area;
+            document.querySelectorAll('.area-btn').forEach(btn =>
+                btn.classList.toggle('active', btn.dataset.area === area)
             );
-            const data = await res.json();
-            const rows = data.values.slice(1);
+            closeSidebar();
+            loadShopData(area);
+        }
 
+        // ===== データ読み込み =====
+        async function loadShopData(area) {
+            if (isLoading) return;
+            isLoading = true;
+
+            const loading = document.getElementById("loading");
+            loading.style.display = "flex";
+
+            markers.forEach(m => { m.map = null; });
+            markers = [];
+            infoWindows.forEach(iw => iw.close());
+            infoWindows = [];
+            activeItem = null;
+
+            const shopList = document.getElementById("shop-list");
+            shopList.innerHTML = '<div style="padding:20px;color:#7a8ba0;font-size:13px;">読み込み中...</div>';
+
+            try {
+                const areaConfig = AREAS[area];
+                map.setCenter(areaConfig.center);
+                map.setZoom(areaConfig.zoom);
+
+                const res = await fetch(
+                    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${areaConfig.sheet}?key=${API_KEY}`
+                );
+                const data = await res.json();
+                const rows = (data.values || []).slice(1);
+
+                document.getElementById("count-badge").textContent = rows.length;
+                shopList.innerHTML = "";
+
+                rows.forEach(([name, lat, lng, added_at], index) => {
+                    const position = { lat: parseFloat(lat), lng: parseFloat(lng) };
+
+                    const marker = new AdvancedMarkerElement({ map, position, title: name });
+                    const infoWindow = new google.maps.InfoWindow({
+                        content: `
+                            <div style="font-family:'Noto Sans JP',sans-serif;padding:4px 6px;">
+                                <div style="font-weight:700;font-size:14px;margin-bottom:4px;">${name}</div>
+                                <div style="font-size:12px;color:#888;">🕐 ${added_at}</div>
+                            </div>
+                        `
+                    });
+
+                    markers.push(marker);
+                    infoWindows.push(infoWindow);
+
+                    marker.addListener("click", () => {
+                        closeAllInfoWindows();
+                        infoWindow.open(map, marker);
+                        setActiveItem(index);
+                        closeSidebar();
+                    });
+
+                    const item = document.createElement("div");
+                    item.className = "shop-item";
+                    item.innerHTML = `
+                        <div class="shop-name">${name}</div>
+                        <div class="shop-date">🕐 ${added_at}</div>
+                    `;
+                    item.addEventListener("click", () => {
+                        map.panTo(position);
+                        map.setZoom(16);
+                        closeAllInfoWindows();
+                        infoWindow.open(map, marker);
+                        setActiveItem(index);
+                        closeSidebar();
+                    });
+                    item.dataset.index = index;
+                    shopList.appendChild(item);
+                });
+
+            } catch (err) {
+                shopList.innerHTML = '<div style="padding:20px;color:#e94560;font-size:13px;">読み込みに失敗しました</div>';
+                console.error("loadShopData error:", err);
+            } finally {
+                loading.style.display = "none";
+                isLoading = false;
+            }
+        }
+
+        // ===== マップ初期化（1回のみ） =====
+        async function initMap() {
             const { Map } = await google.maps.importLibrary("maps");
-            const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
+            ({ AdvancedMarkerElement } = await google.maps.importLibrary("marker"));
 
             map = new Map(document.getElementById("map"), {
-                center: { lat: 35.6433415, lng: 139.6692687 },
-                zoom: 12,
-                mapId: "your_map_id",
+                center: AREAS.shibuya.center,
+                zoom:   AREAS.shibuya.zoom,
+                mapId:  "your_map_id",
                 disableDefaultUI: false,
             });
 
-            document.getElementById("loading").style.display = "none";
-            document.getElementById("count-badge").textContent = rows.length;
-
-            const shopList = document.getElementById("shop-list");
-            shopList.innerHTML = "";
-
-            rows.forEach(([name, lat, lng, added_at], index) => {
-                const position = { lat: parseFloat(lat), lng: parseFloat(lng) };
-
-                const marker = new AdvancedMarkerElement({
-                    map,
-                    position,
-                    title: name,
-                });
-
-                const infoWindow = new google.maps.InfoWindow({
-                    content: `
-                        <div style="font-family:'Noto Sans JP',sans-serif;padding:4px 6px;">
-                            <div style="font-weight:700;font-size:14px;margin-bottom:4px;">${name}</div>
-                            <div style="font-size:12px;color:#888;">🕐 ${added_at}</div>
-                        </div>
-                    `
-                });
-
-                markers.push(marker);
-                infoWindows.push(infoWindow);
-
-                marker.addListener("click", () => {
-                    closeAllInfoWindows();
-                    infoWindow.open(map, marker);
-                    setActiveItem(index);
-                    closeSidebar();
-                });
-
-                const item = document.createElement("div");
-                item.className = "shop-item";
-                item.innerHTML = `
-                    <div class="shop-name">${name}</div>
-                    <div class="shop-date">🕐 ${added_at}</div>
-                `;
-                item.addEventListener("click", () => {
-                    map.panTo(position);
-                    map.setZoom(16);
-                    closeAllInfoWindows();
-                    infoWindow.open(map, marker);
-                    setActiveItem(index);
-                    closeSidebar();
-                });
-                item.dataset.index = index;
-                shopList.appendChild(item);
+            document.querySelectorAll('.area-btn').forEach(btn => {
+                btn.addEventListener('click', () => switchArea(btn.dataset.area));
             });
+
+            await loadShopData("shibuya");
         }
 
         function closeAllInfoWindows() {
