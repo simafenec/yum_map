@@ -32,6 +32,15 @@ class GoogleSpreadsheetClient:
         self._ensure_url_column(self._worksheet_umeda)
         self._backfill_urls(self._worksheet_main)
         self._backfill_urls(self._worksheet_umeda)
+        self._ensure_genre_column(self._worksheet_main)
+        self._ensure_genre_column(self._worksheet_umeda)
+
+    def _ensure_genre_column(self, ws):
+        headers = ws.row_values(1)
+        if len(headers) < 6 or headers[5] != 'genre':
+            if ws.col_count < 6:
+                ws.resize(cols=6)
+            ws.update_cell(1, 6, 'genre')
 
     def _ensure_url_column(self, ws):
         headers = ws.row_values(1)
@@ -60,8 +69,8 @@ class GoogleSpreadsheetClient:
         try:
             return self._spreadsheet.worksheet("umeda")
         except gspread.exceptions.WorksheetNotFound:
-            ws = self._spreadsheet.add_worksheet(title="umeda", rows=1000, cols=5)
-            ws.append_row(["name", "lat", "lon", "timestamp", "url"])
+            ws = self._spreadsheet.add_worksheet(title="umeda", rows=1000, cols=6)
+            ws.append_row(["name", "lat", "lon", "timestamp", "url", "genre"])
             print("umeda シートを新規作成しました。")
             return ws
 
@@ -101,6 +110,30 @@ class GoogleSpreadsheetClient:
         with open(self._cache_file, "w") as f:
             json.dump(list(self._cache), f, ensure_ascii=False, indent=4)
 
+    def update_missing_fields(self, shop: ShopInfo) -> bool:
+        """URL が仮・空、または genre が空の行を更新する"""
+        coords_key = f"{round(shop.lat, 5)},{round(shop.lon, 5)}"
+        ws = self._worksheet_for(shop)
+        all_values = ws.get_all_values()
+        for i, row in enumerate(all_values[1:], start=2):
+            if len(row) < 3:
+                continue
+            try:
+                row_coords = f"{round(float(row[1]), 5)},{round(float(row[2]), 5)}"
+            except ValueError:
+                continue
+            if row_coords == coords_key:
+                current_url   = row[4] if len(row) >= 5 else ''
+                current_genre = row[5] if len(row) >= 6 else ''
+                url_needs   = not current_url or current_url.startswith('https://maps.google.com/?q=')
+                genre_needs = not current_genre and bool(shop.genre)
+                if url_needs:
+                    ws.update_cell(i, 5, shop.url)
+                if genre_needs:
+                    ws.update_cell(i, 6, shop.genre)
+                return url_needs or genre_needs
+        return False
+
     def is_cached(self, place_key: str) -> bool:
         return place_key in self._cache
 
@@ -112,7 +145,7 @@ class GoogleSpreadsheetClient:
         if row.place_key in self._cache or coords_key in self._cache:
             return False
         ws = self._worksheet_for(row)
-        ws.append_row([row.name, row.lat, row.lon, timestamp, row.url])
+        ws.append_row([row.name, row.lat, row.lon, timestamp, row.url, row.genre])
         if row.place_key:
             self._cache.add(row.place_key)
         self._cache.add(coords_key)

@@ -172,6 +172,45 @@
             background: rgba(255,255,255,0.05);
         }
 
+        /* ===== ジャンルフィルター ===== */
+        #genre-filter {
+            display: flex;
+            overflow-x: auto;
+            padding: 8px 12px;
+            gap: 6px;
+            flex-shrink: 0;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        #genre-filter::-webkit-scrollbar { display: none; }
+
+        .genre-chip {
+            padding: 4px 12px;
+            border: none;
+            border-radius: 12px;
+            font-family: 'Noto Sans JP', sans-serif;
+            font-size: 11px;
+            font-weight: 500;
+            white-space: nowrap;
+            cursor: pointer;
+            background: rgba(255,255,255,0.08);
+            color: #7a8ba0;
+            transition: all 0.15s;
+        }
+        .genre-chip.active {
+            background: #e94560;
+            color: #fff;
+        }
+
+        .genre-badge {
+            display: inline-block;
+            font-size: 10px;
+            padding: 1px 7px;
+            border-radius: 8px;
+            background: rgba(233,69,96,0.15);
+            color: #e94560;
+            margin-top: 3px;
+        }
+
         /* ===== ドラッグハンドル（モバイルのみ表示） ===== */
         #drag-handle {
             display: none;
@@ -263,6 +302,7 @@
             <h1>🍜 美味しいお店マップ <span id="count-badge">0</span></h1>
             <p>タップでその場所にジャンプ</p>
         </div>
+        <div id="genre-filter"></div>
         <div id="shop-list">
             <div style="padding:20px;color:#7a8ba0;font-size:13px;">読み込み中...</div>
         </div>
@@ -293,9 +333,11 @@
         let AdvancedMarkerElement;
         let markers    = [];
         let infoWindows = [];
+        let shopGenres  = [];
         let activeItem  = null;
         let currentArea = "shibuya";
         let isLoading   = false;
+        let currentGenreFilter = null;
 
         const sidebar = document.getElementById('sidebar');
         const COLLAPSED_VISIBLE_PX = 72;
@@ -405,7 +447,10 @@
             markers = [];
             infoWindows.forEach(iw => iw.close());
             infoWindows = [];
+            shopGenres = [];
             activeItem = null;
+            currentGenreFilter = null;
+            document.getElementById('genre-filter').innerHTML = '';
 
             const shopList = document.getElementById("shop-list");
             shopList.innerHTML = '<div style="padding:20px;color:#7a8ba0;font-size:13px;">読み込み中...</div>';
@@ -424,15 +469,18 @@
                 document.getElementById("count-badge").textContent = rows.length;
                 shopList.innerHTML = "";
 
-                rows.forEach(([name, lat, lng, added_at, url], index) => {
+                rows.forEach(([name, lat, lng, added_at, url, genre], index) => {
                     const position = { lat: parseFloat(lat), lng: parseFloat(lng) };
                     const mapsUrl = url || `https://maps.google.com/?q=${lat},${lng}`;
+                    const g = genre || '';
+                    shopGenres.push(g);
 
                     const marker = new AdvancedMarkerElement({ map, position, title: name });
                     const infoWindow = new google.maps.InfoWindow({
                         content: `
                             <div style="font-family:'Noto Sans JP',sans-serif;padding:4px 6px;">
-                                <div style="font-weight:700;font-size:14px;margin-bottom:4px;">${name}</div>
+                                <div style="font-weight:700;font-size:14px;margin-bottom:2px;">${name}</div>
+                                ${g ? `<div style="font-size:11px;color:#e94560;margin-bottom:4px;">${g}</div>` : ''}
                                 <div style="font-size:12px;color:#888;">🕐 ${added_at}</div>
                                 <a href="${mapsUrl}" target="_blank"
                                    style="display:inline-block;margin-top:8px;font-size:12px;color:#1a73e8;text-decoration:none;">
@@ -456,6 +504,7 @@
                     item.className = "shop-item";
                     item.innerHTML = `
                         <div class="shop-name">${name}</div>
+                        ${g ? `<span class="genre-badge">${g}</span>` : ''}
                         <div class="shop-date">🕐 ${added_at}</div>
                     `;
                     item.addEventListener("click", () => {
@@ -467,8 +516,23 @@
                         closeSidebar();
                     });
                     item.dataset.index = index;
+                    item.dataset.genre = g;
                     shopList.appendChild(item);
                 });
+
+                // ジャンルチップ生成
+                const genres = [...new Set(shopGenres.filter(Boolean))].sort();
+                const filterEl = document.getElementById('genre-filter');
+                if (genres.length > 0) {
+                    [{ label: 'すべて', value: null }, ...genres.map(g => ({ label: g, value: g }))]
+                        .forEach(({ label, value }) => {
+                            const chip = document.createElement('button');
+                            chip.className = 'genre-chip' + (value === null ? ' active' : '');
+                            chip.textContent = label;
+                            chip.addEventListener('click', () => applyGenreFilter(value));
+                            filterEl.appendChild(chip);
+                        });
+                }
 
             } catch (err) {
                 shopList.innerHTML = '<div style="padding:20px;color:#e94560;font-size:13px;">読み込みに失敗しました</div>';
@@ -496,6 +560,23 @@
             });
 
             await loadShopData("shibuya");
+        }
+
+        function applyGenreFilter(genre) {
+            currentGenreFilter = genre;
+            document.querySelectorAll('.genre-chip').forEach(c =>
+                c.classList.toggle('active', c.textContent === (genre ?? 'すべて'))
+            );
+            let count = 0;
+            markers.forEach((marker, i) => {
+                const show = !genre || shopGenres[i] === genre;
+                marker.map = show ? map : null;
+                if (show) count++;
+            });
+            document.querySelectorAll('.shop-item').forEach(item => {
+                item.style.display = (!genre || item.dataset.genre === genre) ? '' : 'none';
+            });
+            document.getElementById('count-badge').textContent = count;
         }
 
         function closeAllInfoWindows() {

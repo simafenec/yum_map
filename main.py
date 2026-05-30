@@ -1,3 +1,4 @@
+import asyncio
 import discord
 import os
 import datetime
@@ -37,10 +38,18 @@ async def on_message(message : discord.Message):
 
 async def add_shop_info_from_message(message : discord.Message):
     if "https://maps.app.goo.gl/" in message.content:
-        shop_infos = parser.parse_google_map_share_url(message.content, is_cached=spreadsheet_client.is_cached)
+        shop_infos = await asyncio.to_thread(
+            parser.parse_google_map_share_url,
+            message.content,
+            spreadsheet_client.is_cached
+        )
         if shop_infos:
             for shop_info in shop_infos:
-                result = spreadsheet_client.append_row(shop_info, message.created_at.strftime("%Y/%m/%d %H:%M:%S"))
+                result = await asyncio.to_thread(
+                    spreadsheet_client.append_row,
+                    shop_info,
+                    message.created_at.strftime("%Y/%m/%d %H:%M:%S")
+                )
                 if result:
                     print(f"{shop_info.name} を追加しました！")
         else:
@@ -53,6 +62,27 @@ async def update_history(channel_id : int):
         return
 
     async for message in channel.history(limit=100):
-        await add_shop_info_from_message(message)
+        if message.author.bot:
+            continue
+        if "https://maps.app.goo.gl/" not in message.content:
+            continue
+        # キャッシュチェックなしでパースし、新規追加 or URL更新を行う
+        shop_infos = await asyncio.to_thread(
+            parser.parse_google_map_share_url, message.content
+        )
+        for shop_info in shop_infos:
+            result = await asyncio.to_thread(
+                spreadsheet_client.append_row,
+                shop_info,
+                message.created_at.strftime("%Y/%m/%d %H:%M:%S")
+            )
+            if result:
+                print(f"{shop_info.name} を追加しました！")
+            elif shop_info.url or shop_info.genre:
+                updated = await asyncio.to_thread(
+                    spreadsheet_client.update_missing_fields, shop_info
+                )
+                if updated:
+                    print(f"{shop_info.name} のフィールドを更新しました。")
 
 client.run(TOKEN)

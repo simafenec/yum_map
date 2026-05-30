@@ -9,6 +9,32 @@ GOOGLE_MAP_PLACE_URL_REGEX = r"https://www\.google\.[^/]+/maps/place/(?P<name>[^
 PLACES_API_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 PLACES_NEARBY_API_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
 
+GENRE_MAP = {
+    'ramen_restaurant': 'ラーメン',
+    'sushi_restaurant': '寿司',
+    'japanese_restaurant': '和食',
+    'chinese_restaurant': '中華',
+    'korean_restaurant': '韓国料理',
+    'italian_restaurant': 'イタリアン',
+    'french_restaurant': 'フレンチ',
+    'american_restaurant': 'アメリカン',
+    'hamburger_restaurant': 'バーガー',
+    'pizza_restaurant': 'ピザ',
+    'indian_restaurant': 'インド料理',
+    'thai_restaurant': 'タイ料理',
+    'vietnamese_restaurant': 'ベトナム料理',
+    'steak_house': 'ステーキ',
+    'seafood_restaurant': 'シーフード',
+    'izakaya_restaurant': '居酒屋',
+    'restaurant': 'レストラン',
+    'bar': 'バー',
+    'cafe': 'カフェ',
+    'bakery': 'ベーカリー',
+    'meal_takeaway': 'テイクアウト',
+    'night_club': 'クラブ',
+}
+GENRE_SKIP = frozenset({'food', 'point_of_interest', 'establishment', 'store', 'geocode'})
+
 @dataclass
 class ShopInfo:
     name: str
@@ -16,6 +42,7 @@ class ShopInfo:
     lon: float
     place_key: str = field(default='')
     url: str = field(default='')
+    genre: str = field(default='')
 
 class URLParser:
     def __init__(self, geocoding_api_key: str = None):
@@ -74,6 +101,15 @@ class URLParser:
 
         return ''
 
+    def _extract_genre(self, types: list) -> str:
+        for t in types:
+            if t in GENRE_MAP:
+                return GENRE_MAP[t]
+        for t in types:
+            if t not in GENRE_SKIP:
+                return t
+        return ''
+
     def _extract_from_sorry_redirect(self, sorry_url: str) -> Optional[ShopInfo]:
         """google.com/sorry/index へのリダイレクト時に continue パラメータから店情報を取得する"""
         sorry_qs = parse_qs(urlparse(sorry_url).query)
@@ -105,7 +141,12 @@ class URLParser:
             return None
         result = results[0]
         loc = result['geometry']['location']
-        return ShopInfo(name=result['name'], lat=loc['lat'], lon=loc['lng'])
+        return ShopInfo(
+            name=result['name'],
+            lat=loc['lat'],
+            lon=loc['lng'],
+            genre=self._extract_genre(result.get('types', []))
+        )
 
     def _find_place(self, query: str) -> Optional[ShopInfo]:
         resp = requests.get(
@@ -120,7 +161,8 @@ class URLParser:
         return ShopInfo(
             name=result['name'],
             lat=loc['lat'],
-            lon=loc['lng']
+            lon=loc['lng'],
+            genre=self._extract_genre(result.get('types', []))
         )
 
     def _extract_shop_info(self, url: str, html: str) -> Optional[ShopInfo]:
@@ -133,7 +175,12 @@ class URLParser:
             lat, lon = self._extract_coords(combined)
             if lat is None:
                 lat, lon = float(match.group("lat")), float(match.group("lon"))
-            return ShopInfo(name=name, lat=lat, lon=lon)
+            genre = ''
+            if self._geocoding_api_key:
+                enriched = self._find_place(name)
+                if enriched:
+                    genre = enriched.genre
+            return ShopInfo(name=name, lat=lat, lon=lon, genre=genre)
 
         # パターン1b: /maps/place/NAME/data= 形式（GPS共有など、座標なし）
         data_match = re.search(r'https://www\.google\.[^/]+/maps/place/(?P<name>[^/]+)/data=', url)
