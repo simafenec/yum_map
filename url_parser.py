@@ -15,6 +15,7 @@ class ShopInfo:
     lat: float
     lon: float
     place_key: str = field(default='')
+    url: str = field(default='')
 
 class URLParser:
     def __init__(self, geocoding_api_key: str = None):
@@ -29,7 +30,10 @@ class URLParser:
 
     # 外部URLへのアクセスなので後でインフラ層に切り出す
     def _get_response(self, url: str) -> requests.Response:
-        return requests.get(self._remove_tracking_params(url), allow_redirects=True)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+        }
+        return requests.get(self._remove_tracking_params(url), allow_redirects=True, headers=headers)
 
     def _unquote_unicode(self, s: str) -> str:
         return unquote_plus(s, encoding='utf-8', errors='replace')
@@ -69,6 +73,22 @@ class URLParser:
             return f"{lat},{lon}"
 
         return ''
+
+    def _extract_from_sorry_redirect(self, sorry_url: str) -> Optional[ShopInfo]:
+        """google.com/sorry/index へのリダイレクト時に continue パラメータから店情報を取得する"""
+        sorry_qs = parse_qs(urlparse(sorry_url).query)
+        if 'continue' not in sorry_qs:
+            return None
+        continue_url = unquote_plus(sorry_qs['continue'][0])
+        c_qs = parse_qs(urlparse(continue_url).query)
+        ftid = c_qs.get('ftid', [''])[0]
+        q_value = c_qs.get('q', [''])[0]
+        if not q_value or not self._geocoding_api_key:
+            return None
+        info = self._find_place(q_value)
+        if info:
+            info.place_key = ftid
+        return info
 
     def _find_place_nearby(self, lat: float, lon: float) -> Optional[ShopInfo]:
         resp = requests.get(
@@ -174,12 +194,30 @@ class URLParser:
         infos = []
         for url in matched:
             response = self._get_response(url)
+
+            if '/sorry/' in response.url:
+                # ボット検出でリダイレクトされた場合: continue URL から ftid を取り出してキャッシュ確認
+                sorry_qs = parse_qs(urlparse(response.url).query)
+                if 'continue' in sorry_qs:
+                    c_qs = parse_qs(urlparse(unquote_plus(sorry_qs['continue'][0])).query)
+                    ftid = c_qs.get('ftid', [''])[0]
+                    if is_cached and ftid and is_cached(ftid):
+                        continue
+                info = self._extract_from_sorry_redirect(response.url)
+                if info is None:
+                    print(f"URLから情報を取得できませんでした: {url} -> {response.url}")
+                else:
+                    info.url = url
+                    infos.append(info)
+                continue
+
             place_key = self._extract_place_key(response.url)
             if is_cached and place_key and is_cached(place_key):
                 continue
             info = self._extract_shop_info(response.url, response.text)
             if info:
                 info.place_key = place_key
+                info.url = url
                 infos.append(info)
             else:
                 print(f"URLから情報を取得できませんでした: {url} -> {response.url}")

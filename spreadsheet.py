@@ -28,12 +28,40 @@ class GoogleSpreadsheetClient:
         self._cache_file = "shop_cache.json"
         self._cache = self._load_cache()
 
+        self._ensure_url_column(self._worksheet_main)
+        self._ensure_url_column(self._worksheet_umeda)
+        self._backfill_urls(self._worksheet_main)
+        self._backfill_urls(self._worksheet_umeda)
+
+    def _ensure_url_column(self, ws):
+        headers = ws.row_values(1)
+        if len(headers) < 5 or headers[4] != 'url':
+            if ws.col_count < 5:
+                ws.resize(cols=5)
+            ws.update_cell(1, 5, 'url')
+
+    def _backfill_urls(self, ws):
+        all_values = ws.get_all_values()
+        updates = []
+        for i, row in enumerate(all_values[1:], start=2):
+            if len(row) < 5 or not row[4]:
+                try:
+                    lat, lon = float(row[1]), float(row[2])
+                    updates.append({
+                        'range': f'E{i}',
+                        'values': [[f'https://maps.google.com/?q={lat},{lon}']]
+                    })
+                except (ValueError, IndexError):
+                    pass
+        if updates:
+            ws.batch_update(updates)
+
     def _get_or_create_umeda_worksheet(self):
         try:
             return self._spreadsheet.worksheet("umeda")
         except gspread.exceptions.WorksheetNotFound:
-            ws = self._spreadsheet.add_worksheet(title="umeda", rows=1000, cols=4)
-            ws.append_row(["name", "lat", "lon", "timestamp"])
+            ws = self._spreadsheet.add_worksheet(title="umeda", rows=1000, cols=5)
+            ws.append_row(["name", "lat", "lon", "timestamp", "url"])
             print("umeda シートを新規作成しました。")
             return ws
 
@@ -84,7 +112,7 @@ class GoogleSpreadsheetClient:
         if row.place_key in self._cache or coords_key in self._cache:
             return False
         ws = self._worksheet_for(row)
-        ws.append_row([row.name, row.lat, row.lon, timestamp])
+        ws.append_row([row.name, row.lat, row.lon, timestamp, row.url])
         if row.place_key:
             self._cache.add(row.place_key)
         self._cache.add(coords_key)
