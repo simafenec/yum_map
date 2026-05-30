@@ -9,6 +9,43 @@ GOOGLE_MAP_PLACE_URL_REGEX = r"https://www\.google\.[^/]+/maps/place/(?P<name>[^
 PLACES_API_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 PLACES_NEARBY_API_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
 
+# Places API v1 (textsearch) は汎用タイプしか返さないため、店名キーワードを第1優先にする
+NAME_GENRE_PATTERNS = [
+    (re.compile(r'居酒屋|酒場|もつ焼き?|串焼き?居酒', re.IGNORECASE), '居酒屋'),
+    (re.compile(r'ラーメン|らーめん|拉麺', re.IGNORECASE), 'ラーメン'),
+    (re.compile(r'寿司|すし|鮨|回転寿司', re.IGNORECASE), '寿司'),
+    (re.compile(r'焼肉|焼き肉|やきにく', re.IGNORECASE), '焼肉'),
+    (re.compile(r'焼鳥|焼き鳥|やきとり|炭火焼鳥|串鳥', re.IGNORECASE), '焼鳥'),
+    (re.compile(r'天ぷら|てんぷら|天麩羅', re.IGNORECASE), '天ぷら'),
+    (re.compile(r'とんかつ|トンカツ', re.IGNORECASE), 'とんかつ'),
+    (re.compile(r'蕎麦|そば', re.IGNORECASE), '蕎麦'),
+    (re.compile(r'うどん', re.IGNORECASE), 'うどん'),
+    (re.compile(r'餃子|ぎょうざ|ギョウザ|gyoza', re.IGNORECASE), '中華'),
+    (re.compile(r'中華|中国料理|チャイニーズ', re.IGNORECASE), '中華'),
+    (re.compile(r'台湾料理|台湾', re.IGNORECASE), '台湾料理'),
+    (re.compile(r'韓国料理|韓国|コリアン|korean', re.IGNORECASE), '韓国料理'),
+    (re.compile(r'ビリヤニ|biryani', re.IGNORECASE), 'インド料理'),
+    (re.compile(r'インド料理|インド|indian', re.IGNORECASE), 'インド料理'),
+    (re.compile(r'カレー|curry', re.IGNORECASE), 'カレー'),
+    (re.compile(r'タイ料理|タイ|thai', re.IGNORECASE), 'タイ料理'),
+    (re.compile(r'ベトナム料理|ベトナム|vietnamese|pho|フォー', re.IGNORECASE), 'ベトナム料理'),
+    (re.compile(r'タコス|taco|メキシカン|mexican', re.IGNORECASE), 'メキシカン'),
+    (re.compile(r'ピザ|pizza', re.IGNORECASE), 'ピザ'),
+    (re.compile(r'パスタ|イタリアン|italian', re.IGNORECASE), 'イタリアン'),
+    (re.compile(r'ビストロ|bistro|フレンチ|french', re.IGNORECASE), 'フレンチ'),
+    (re.compile(r'ステーキ|steak', re.IGNORECASE), 'ステーキ'),
+    (re.compile(r'バーガー|burger|ハンバーガー', re.IGNORECASE), 'バーガー'),
+    (re.compile(r'和食|日本料理|割烹', re.IGNORECASE), '和食'),
+    (re.compile(r'定食|食堂', re.IGNORECASE), '定食'),
+    (re.compile(r'丼|どんぶり', re.IGNORECASE), '丼'),
+    (re.compile(r'鍋|しゃぶしゃぶ|すき焼き', re.IGNORECASE), '鍋料理'),
+    (re.compile(r'串|くし料理', re.IGNORECASE), '串料理'),
+    (re.compile(r'ベーカリー|bakery|パン屋|パン工房', re.IGNORECASE), 'ベーカリー'),
+    (re.compile(r'カフェ|cafe|coffee|コーヒー', re.IGNORECASE), 'カフェ'),
+    (re.compile(r'バー|bar\b|cocktail|カクテル', re.IGNORECASE), 'バー'),
+]
+
+# Places API types フォールバック（meal_takeaway は機能フラグのため除外）
 GENRE_MAP = {
     'ramen_restaurant': 'ラーメン',
     'sushi_restaurant': '寿司',
@@ -30,7 +67,6 @@ GENRE_MAP = {
     'bar': 'バー',
     'cafe': 'カフェ',
     'bakery': 'ベーカリー',
-    'meal_takeaway': 'テイクアウト',
     'night_club': 'クラブ',
 }
 GENRE_SKIP = frozenset({'food', 'point_of_interest', 'establishment', 'store', 'geocode'})
@@ -101,6 +137,12 @@ class URLParser:
 
         return ''
 
+    def _genre_from_name(self, name: str) -> str:
+        for pattern, genre in NAME_GENRE_PATTERNS:
+            if pattern.search(name):
+                return genre
+        return ''
+
     def _extract_genre(self, types: list) -> str:
         for t in types:
             if t in GENRE_MAP:
@@ -141,12 +183,9 @@ class URLParser:
             return None
         result = results[0]
         loc = result['geometry']['location']
-        return ShopInfo(
-            name=result['name'],
-            lat=loc['lat'],
-            lon=loc['lng'],
-            genre=self._extract_genre(result.get('types', []))
-        )
+        name = result['name']
+        genre = self._genre_from_name(name) or self._extract_genre(result.get('types', []))
+        return ShopInfo(name=name, lat=loc['lat'], lon=loc['lng'], genre=genre)
 
     def _find_place(self, query: str) -> Optional[ShopInfo]:
         resp = requests.get(
@@ -158,12 +197,9 @@ class URLParser:
             return None
         result = results[0]
         loc = result['geometry']['location']
-        return ShopInfo(
-            name=result['name'],
-            lat=loc['lat'],
-            lon=loc['lng'],
-            genre=self._extract_genre(result.get('types', []))
-        )
+        name = result['name']
+        genre = self._genre_from_name(name) or self._extract_genre(result.get('types', []))
+        return ShopInfo(name=name, lat=loc['lat'], lon=loc['lng'], genre=genre)
 
     def _extract_shop_info(self, url: str, html: str) -> Optional[ShopInfo]:
         combined = url + '\n' + html
